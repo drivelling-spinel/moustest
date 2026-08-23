@@ -13,8 +13,9 @@ static int has_exited = 0;
 static int verbosity = 0;
 static int irq = 0;
 static int port = 0;
-static int count = 0;
 static int thorough = 0;
+static int rate = 0;
+static int bits = 0;
 
 static int org_mask = 0;
 static int org_ier = 0;
@@ -31,32 +32,56 @@ static handler_t org_handler;
 void window()
 {
   static int w = 0;
+  char buffer[32];
   int i = 0;
   if(w) return;
   w = 1;
 
-  for(i = 1 ; i <= 8 ; i++) {
+  for(i = 1 ; i <= 10 ; i++) {
     _settextposition(i, 1);
-    _outtext("                           ");
+    _outtext("                                       ");
   }
 
   _settextcolor(4);
   _settextposition(1, 1);
   _outtext("GENERIC INFORMATION");
+  sprintf(buffer, "{ %d/%d/s1/p0 }", rate, bits);
+  _settextposition(1,22);
+  _outtext(buffer); 
   _settextcolor(14);
   _settextposition(2, 1);
   _outtext("total events:");
   _settextposition(3, 1);
-  _outtext("raw: ");
+  _outtext("raw bytes: ");
    
   _settextcolor(4);
-  _settextposition(4, 1);
-  _outtext("SPECIFIC PROTOCOL");
+  _settextposition(5, 1);
+  _outtext("MICROSOFT COMPATIBLE { ms }");
+  _settextcolor(14);
+  _settextposition(6, 1);
+  _outtext("X:       Y:       B0:[ ] B1:[ ]");
+  _settextposition(7, 1);
+  _outtext("bytes: ");
+
+  _settextcolor(4);
+  _settextposition(8, 1);
+  _outtext("LOGITECH LEGACY      { logi }");
+  _settextcolor(14);
+  _settextposition(9, 1);
+  _outtext("X:       Y:       B0:[ ] B1:[ ] B2:[ ]");
+  _settextposition(10, 1);
+  _outtext("bytes: ");
+
 }
 
-int max_raw = 7;
-int raw[7];
+static int raw[21];
+static int count = 0;
+static int seen_count = 0;
 
+int generic_ready()
+{
+  return seen_count != count;
+}
 
 void generic()
 {
@@ -66,53 +91,176 @@ void generic()
   _settextposition(2, 18);
   sprintf(buffer, "%d", count);
   _outtext(buffer);
-  _settextposition(3, 6);
-  for(i = 0 ; i < max_raw && i < count ; i++) {
+  _settextposition(3, 12);
+  for(i = 0 ; i < sizeof(raw) / sizeof(*raw) && i < count && i < 9 ; i++) {
     sprintf(buffer, "%02x ", raw[i]);
     _outtext(buffer);    
   }  
+  _settextposition(4, 3);
+  for( ; i < sizeof(raw) / sizeof(*raw) && i < count ; i++) {
+    sprintf(buffer, "%02x ", raw[i]);
+    _outtext(buffer);    
+  }  
+  seen_count = count;
 }
 
-void stats(int g)
+
+static int ms_bytes[3];
+static int ms_x;
+static int ms_y;
+static int ms_buttons;
+static int ms_seen = 0;
+static int ms_count = 0;
+static int ms_idx = 0;
+
+void ms()
+{
+  char buffer[32];
+  int i = 0;
+  _settextcolor(14);
+  _settextposition(6, 3);
+  _outtext("       ");
+  _settextposition(6, 4 + (ms_x >= 0 ? 0 : -1));
+  sprintf(buffer, "%d", ms_x);
+  _outtext(buffer);
+  _settextposition(6, 12); 
+  _outtext("       ");
+  _settextposition(6, 13 + (ms_y >= 0 ? 0 : -1));
+  sprintf(buffer, "%d", ms_y);
+  _outtext(buffer);
+  _settextposition(6, 23);
+  _outtext(ms_buttons & 1 ? "X" : " ");
+  _settextposition(6, 30);
+  _outtext(ms_buttons & 2 ? "X" : " ");
+  _settextposition(7, 8);
+  for(i = 0 ; i < sizeof(ms_bytes) / sizeof(*ms_bytes) ; i++) {
+    sprintf(buffer, "%02x ", ms_bytes[i]);
+    _outtext(buffer);
+  }
+  ms_seen = ms_count;
+}
+
+int ms_ready()
+{
+  return ms_seen != ms_count;
+}
+
+static int logi_bytes[3];
+static int logi_x;
+static int logi_y;
+static int logi_buttons;
+static int logi_seen = 0;
+static int logi_count = 0;
+static int logi_idx = 0;
+
+void logi()
+{
+  char buffer[32];
+  int i = 0;
+  _settextcolor(14);
+  _settextposition(9, 3);
+  _outtext("       ");
+  _settextposition(9, 4 + (logi_x >= 0 ? 0 : -1));
+  sprintf(buffer, "%d", logi_x);
+  _outtext(buffer);
+  _settextposition(9, 12);
+  _outtext("       ");
+  _settextposition(9, 13 + (logi_y >= 0 ? 0 : -1));
+  sprintf(buffer, "%d", logi_y);
+  _outtext(buffer);
+  _settextposition(9, 23);
+  _outtext(logi_buttons & 1 ? "X" : " ");
+  _settextposition(9, 30);
+  _outtext(logi_buttons & 2 ? "X" : " ");
+  _settextposition(9, 37);
+  _outtext(logi_buttons & 4 ? "X" : " ");
+  _settextposition(10, 8);
+  for(i = 0 ; i < sizeof(logi_bytes) / sizeof(*logi_bytes) ; i++) {
+    sprintf(buffer, "%02x ", logi_bytes[i]);
+    _outtext(buffer);
+  }
+  logi_seen = logi_count;
+}
+
+int logi_ready()
+{
+  return logi_seen != logi_count;
+}
+
+void stats(int mask)
 {
   struct rccoord crd;
   int cl;  
   crd = _gettextposition();
   cl = _gettextcolor();
-
   window();
-  switch(g) {
-    case 0:
-      generic();
-      break;
-    default:
-      ;
-  }
-
+  if(mask & 1) generic();
+  if(mask & 2) ms();
+  if(mask & 4) logi();
   _settextposition(crd.row, crd.col);
   _settextcolor(cl);
 }
 
 void update()
 {
+  int mask = 0;
   outp(0x21, inp(0x21) | (1 << irq));
-  if(1) stats(0);
+  if(generic_ready()) mask |= 1;
+  if(ms_ready()) mask |= 2;
+  if(logi_ready()) mask |= 4;
+  if(mask) stats(mask);
   outp(0x21, inp(0x21) & ~(1 << irq));
 }
 
-void feed_raw(b)
+void feed_ms(b)
+{
+  if(b & 0x40) ms_idx = 0;
+  else if(ms_idx < sizeof(ms_bytes) / sizeof(*ms_bytes)) ms_idx++;
+  if(ms_idx < sizeof(ms_bytes) / sizeof(*ms_bytes)) ms_bytes[ms_idx] = b;
+
+  if(ms_idx == sizeof(ms_bytes) / sizeof(*ms_bytes) - 1) {
+    int t;
+    ms_buttons = 0;
+    ms_buttons |= ((ms_bytes[0] & 0x20) >> 5) | ((ms_bytes[0] & 0x10) >> 3);
+    t = ((ms_bytes[0] & 3) << 6) | (ms_bytes[1] & 0x3f);
+    if(t & 0x80) t |= 0xff00;
+    ms_x += t;
+    t = ((ms_bytes[0] & 0xc) << 4) | (ms_bytes[2] & 0x3f);
+    if(t & 0x80) t |= 0xff00;
+    ms_y += t;
+    ms_count++;
+  }
+}
+
+void feed_logi(b)
+{
+  if(b & 0x80) logi_idx = 0;
+  else if(logi_idx < sizeof(logi_bytes) / sizeof(*logi_bytes)) logi_idx++;
+  if(logi_idx < sizeof(logi_bytes) / sizeof(*logi_bytes)) logi_bytes[logi_idx] = b;
+
+  if(logi_idx == sizeof(logi_bytes) / sizeof(*logi_bytes) - 1) {
+    logi_buttons = logi_bytes[0] & 7;
+    logi_x += ((logi_bytes[0] & 0x10) ? 1 : -1) * logi_bytes[1];
+    logi_y += ((logi_bytes[1] & 8) ? 1 : -1) * logi_bytes[2];
+    logi_count++;
+  }
+}
+
+void feed_generic(b)
 {
   int i = 0;
-  for(i = 1 ; i < max_raw && i < count ; i++) {
+  for(i = 1 ; i < sizeof(raw) / sizeof(*raw) && i < count ; i++) {
     raw[i - 1] = raw[i];
   }
-  raw[count < max_raw ? count : max_raw - 1] = b;
+  raw[count < sizeof(raw) / sizeof(*raw) ? count : sizeof(raw) / sizeof(*raw) - 1] = b;
   count++;
 }
 
 void feed(int b)
 {
-  feed_raw(b);
+  feed_generic(b);
+  feed_ms(b);
+  feed_logi(b);
 }
 
 void _WCINTERRUPT our_handler()
@@ -256,7 +404,7 @@ void summary(int i, int p, int v)
 
 void main(int argc, char ** argv)
 {
-  int i = 4, p = 0x3f8, j = 0, v = 0, x = 0, b = 1200, d = 60;
+  int i = 4, p = 0x3f8, j = 0, v = 0, x = 0, b = 7, r = 1200, d = 0x60, lm = 2;
   handler_t org = 0;
 
   hello(argc, argv);   
@@ -267,7 +415,8 @@ void main(int argc, char ** argv)
     if(*argv[j] == 'v' || *argv[j] == 'v') v = atoi(argv[j]+1);
     if(*argv[j] == '?' || *argv[j] == 'h' || *argv[j] == 'h') help();
     if(*argv[j] == 'x' || *argv[j] == 'X') x = 1;
-    if(*argv[j] == 'b' || *argv[j] == 'B') b = atoi(argv[j]+1);
+    if(*argv[j] == 'r' || *argv[j] == 'r') r = atoi(argv[j]+1);
+    if(*argv[j] == 'b' || *argv[j] == 'b') b = atoi(argv[j]+1);
   }    
   summary(i, p, v);
   verbosity = v;
@@ -275,15 +424,29 @@ void main(int argc, char ** argv)
   port = p;
   thorough = x;
 
-  switch(b)
+  switch(r)
   {
     case 2400:
       d = 0x30;
       break;
+    case 1200:
     default:
+      r = 1200;
       ;
   }
+  rate = r;
 
+  switch(b)
+  {
+    case 8:
+      lm = 3;
+      break;
+    case 7:
+    default:
+      b = 7;
+      break;
+  }
+  bits = b;
 
   org = _dos_getvect(8 + irq);
   if(org) {
@@ -333,15 +496,16 @@ void main(int argc, char ** argv)
       org_dll = inp(port);
       org_dlm = inp(port + 1);
       if(org_dll != d & 0xff || org_dlm != (d >> 8) & 0xff) {
-        if(verbosity >= 2) printf("Switching port to %d baud (%xH)\n", b, port);
+        if(verbosity >= 2) printf("Switching port to %d baud / divisor %02x:%02x (%xH)\n", 
+                                  rate, (d >> 8) & 0xff, d&0xff, port);
         outp(port, d&0xff);
         outp(port + 1, (d >> 8) & 0xff);
       }
 
       if(verbosity >= 2) { 
-        printf("Setting port line control to 7b 1s no parity (%xH)\n", port);
+        printf("Setting port line control to %db 1s no parity (%xH)\n", bits, port);
       }
-      outp(port + 3, 2);
+      outp(port + 3, lm);
 
       if(x) {
         if(verbosity >= 2) { 
@@ -381,11 +545,11 @@ void main(int argc, char ** argv)
     org_col = _gettextcolor();
     while(1) { 
       char buf[2] = {0 , 0};
-      char *tmpl = "|/=\\";
-      delay(99); 
+      char *tmpl = "|/-\\";
+      delay(50); 
       _settextposition(org_pos.row, org_pos.col);  
       _settextcolor(2);
-      sprintf(buf, "%c", tmpl[j++%4]); 
+      sprintf(buf, "%c", tmpl[(j++/2)%4]); 
       _outtext(buf);
       _settextcolor(org_col);
       update();
