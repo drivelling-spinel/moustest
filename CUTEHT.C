@@ -9,7 +9,8 @@
 #include <i86.h>
 #include <graph.h>
 
-#define SIGNATURE "CUTEHTV1"
+#define SIGNATURE "CUTEHTV2"
+#define KILLTSR "KILLTSR"
 
 typedef enum {
  cmd_uninst = 0x55
@@ -57,7 +58,9 @@ typedef struct
  char weap;
  sbyte_t rev;
  int dbl;
+ int clk;
  int tmr;
+ int now;
  char sens;
  char reset;
  char req;
@@ -124,7 +127,7 @@ void check_controls()
   if(data.ctr[2] || data.stat & 2) data.mvt.btns |= (1 << btn_strafe);
   if(data.flywheel || data.weap) {
     data.mvt.angle = data.rev * 512;
-    if(data.stat & 4) {      
+    if(data.stat & 4) {
       if(data.rev > -8) data.rev -= 1;
     } else {
       if(data.rev < 0) data.rev += 1;
@@ -134,16 +137,27 @@ void check_controls()
   }
 
   if(data.tmr) {
-    int dif = 0;
-    outp(0x70, 0);
-    dif = inp(0x71) - data.tmr;    
-    if(dif > 1 || dif < -1) data.tmr = data.dbl = 0;
-    else data.dbl += data.ctr[2];
-    if(data.dbl >= 2) data.mvt.btns |= (1 << btn_use);
-  } else if(data.ctr[2]) {
-    outp(0x70, 0);
-    data.tmr = inp(0x71);
+    data.now += 1;
+    data.dbl += data.ctr[2];
+    while(data.dbl >= 2) {
+      data.dbl -= 2;
+      data.clk += 2;
+      data.mvt.btns |= (1 << btn_use);
+    }    
+    if(data.ctr[2] || data.stat & 2) {
+      data.tmr = data.now;
+    } else if(data.now - data.tmr > 9) {
+      if(data.dbl + data.clk >= 15) data.mvt.btns |= (1 << btn_pause);
+      else if(data.dbl + data.clk >= 3) {
+        data.ver = data.pitch = 0;
+        data.mvt.btns |= (1 << btn_center);
+      }
+      data.tmr = data.dbl = data.clk = 0;
+    }  
+  } else if(data.ctr[2] || data.stat & 2) {
+    data.tmr = data.now = 1;
     data.dbl = data.ctr[2];
+    data.clk = 0;
   } 
 
   if(data.mvt.btns & (1 << btn_strafe)) {
@@ -187,18 +201,32 @@ void doneprog()
   exit(0);
 }
 
+char * progname(int argc, char ** argv)
+{
+  char * progname = argv[0] + strlen(argv[0]);
+  while(progname > argv[0]) {
+    progname -= 1;
+    if(*progname == '\\' || *progname == '/') {
+      progname +=1 ; break;
+    }
+  }
+  return progname;
+}
+
 void help()
 {
   printf("\nHeretic CuteMouse Driver.\n");
-  printf("Usage: CUTEHT [-v0x<vector>] [-u<address>] [-s<sensitivity>] [-a] [-f|w] \n");
+  printf("Usage: CUTEHT [-v0x<vector>] [-u<address>] [-s<sensitivity>] [-a] [-f|w] [-k]\n");
   printf("                 where value is from (60-67),\n");
   printf("                 address is memory block output by the driver before,\n");
   printf("                 sensitivity is from 1 to 50,\n");
+  printf("                 \"k\" will generate " KILLTSR ".BAT in current directory\n");
   printf("                 \"a\" is for always run,\n");
-  printf("                 \"f\" is for flight mousewheel control\n\n");
+  printf("                 \"f\" is for flight mousewheel control\n");
   printf("                 \"w\" is for weapons mousewheel control\n\n");
   printf("Or:    TYPE RESPONSE | CUTEHT [...] > RESP.TMP\n");
   printf("       HERETIC @RESP.TMP\n");
+  printf("if -k: " KILLTSR "\n");
   printf("\n");
   doneprog();
 }
@@ -210,9 +238,16 @@ void summary(int v, int u, int r)
   printf("Vector 0x%x\n", v);
 }
 
+void makekill(int argc, char ** argv, long mem)
+{
+  FILE * batch = fopen(KILLTSR ".BAT", "wt");
+  fprintf(batch, "@ECHO OFF\n%s /u %ld\n", progname(argc, argv), mem);
+  fclose(batch);
+}
+
 void main(int argc, char ** argv)
 {
-  int i = 0, v = 0, j = 0, u = 0, s = 10, a = 0, r = 0, f = 0, w = 0;
+  int i = 0, v = 0, j = 0, u = 0, s = 10, a = 0, r = 0, f = 0, w = 0, k = 0;
   long l = 0;
   handler_t org = 0;
   struct SREGS segs;
@@ -244,6 +279,7 @@ void main(int argc, char ** argv)
     else if(*argv[j] == 'a' || *argv[j] == 'A') a = 1;
     else if(*argv[j] == 'f' || *argv[j] == 'F') f = 1; 
     else if(*argv[j] == 'w' || *argv[j] == 'W') w = 1; 
+    else if(*argv[j] == 'k' || *argv[j] == 'K') k = 1; 
     else if(*argv[j] == '?' || *argv[j] == 'h' || *argv[j] == 'h') help();
   }
 
@@ -254,7 +290,7 @@ void main(int argc, char ** argv)
     _fmemcpy(&data, remote, sizeof(data));
     if(!strncmp(SIGNATURE, &data.sgn, sizeof(SIGNATURE) - 1))
     {
-      if(data.vector >= 0x60 && data.vector <= 0x67) {      
+      if(data.vector >= 0x60 && data.vector <= 0x67) {
         summary(data.vector, u, r);
         
         data.req = cmd_uninst;
@@ -271,7 +307,7 @@ void main(int argc, char ** argv)
       }
     }
   }
-  
+
   fprintf(stderr, "Unable to confirm driver is loaded; backing out\n");
   doneprog();
 inst:
@@ -332,12 +368,15 @@ inst:
 
   segread(&segs);
   l = ((long)segs.ds << 4) + (unsigned)(&data);
+  if(k) makekill(argc, argv, l);
   if(!r) {
     printf("Memory block: %ld (%x:%x)\n", l, segs.ds, &data);
     printf("HERETIC -nomouse -externdriver %ld\n", l);
+    if(k) printf("then run " KILLTSR " to remove driver.\n");
   } else {
     printf("-nomouse\n-externdriver %ld\n", l);
   }
+
   _dos_setvect(v, our_handler);
   l = (long)segs.ds - _psp;
   l = ((l << 4) + (unsigned)(&data) + sizeof(data) - 1) / 16 + 1;
