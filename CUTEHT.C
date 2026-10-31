@@ -9,7 +9,7 @@
 #include <i86.h>
 #include <graph.h>
 
-#define SIGNATURE "CUTEHTV2"
+#define SIGNATURE "CUTEHTV3"
 #define KILLTSR "KILLTSR"
 
 typedef enum {
@@ -31,6 +31,14 @@ typedef enum {
  btn_cycle
 } btn_t;
 
+typedef enum {
+ dm_pause = 0,
+ dm_fire = 0,
+ dm_use,
+ dm_change,
+ dm_special = 7
+} dm_t;
+
 typedef signed char sbyte_t;
 typedef unsigned short word_t;
 
@@ -44,6 +52,16 @@ typedef struct
  sbyte_t fly;
  word_t btns;
 } controldata_t;
+
+typedef struct {
+ word_t pad[2]; // interrupt
+ sbyte_t fwd;
+ sbyte_t strafe;
+ short turn;
+ short cons;
+ char chat;
+ char btns;
+} doomtic_t;
 
 typedef struct 
 {
@@ -67,117 +85,159 @@ typedef struct
  char resp;
  char cnfm;
  char ack;
+ char doom;
 
  union REGPACK regs;
  int ctr[4];
  int stat, hor, ver;
  int pitch;
  int i;
+ sbyte_t dmweap;
  char sgn[sizeof(SIGNATURE)];
 } tsrdata_t;
 
 typedef void (_WCINTERRUPT *handler_t)();
 static handler_t org_handler;
 
-tsrdata_t data;
+union {
+  tsrdata_t data;
+  doomtic_t tic;
+} _u;
 
 void check_controls()
 {
-  memset(&data.mvt, 0, sizeof(data.mvt));
+  memset(&_u.data.mvt, 0, sizeof(_u.data.mvt));
 
-  if(!data.reset) {
-    data.reset = 1;
-    data.ver = 0;
-    for( data.i = -1 ; data.i < 3 ; data.i += 1) {
-      memset(&data.regs, 0, sizeof(data.regs));
-      data.regs.w.ax = 5;
-      data.regs.w.bx = data.i;
-      intr(0x33, &data.regs);
+  if(!_u.data.reset) {
+    _u.data.reset = 1;
+    _u.data.ver = 0;
+    for( _u.data.i = -1 ; _u.data.i < 3 ; _u.data.i += 1) {
+      memset(&_u.data.regs, 0, sizeof(_u.data.regs));
+      _u.data.regs.w.ax = 5;
+      _u.data.regs.w.bx = _u.data.i;
+      intr(0x33, &_u.data.regs);
     }
+
+    _u.data.dmweap = 1;
     return;
   }
  
-  for( data.i = -1 ; data.i < 3 ; data.i += 1) {
-    memset(&data.regs, 0, sizeof(data.regs));
-    data.regs.w.ax = 5;
-    data.regs.w.bx = data.i;
-    intr(0x33, &data.regs);
-    data.ctr[data.i + 1] = data.regs.w.bx;
-    data.stat = data.regs.w.ax;
+  for(_u.data.i = -1 ; _u.data.i < 3 ; _u.data.i += 1) {
+    memset(&_u.data.regs, 0, sizeof(_u.data.regs));
+    _u.data.regs.w.ax = 5;
+    _u.data.regs.w.bx = _u.data.i;
+    intr(0x33, &_u.data.regs);
+    _u.data.ctr[_u.data.i + 1] = _u.data.regs.w.bx;
+    _u.data.stat = _u.data.regs.w.ax;
   }
 
-  memset(&data.regs, 0, sizeof(data.regs));
-  data.regs.w.ax = 0xb;
-  intr(0x33, &data.regs);
-  data.hor = data.regs.w.cx;
-  data.ver = data.regs.w.dx;
+  memset(&_u.data.regs, 0, sizeof(_u.data.regs));
+  _u.data.regs.w.ax = 0xb;
+  intr(0x33, &_u.data.regs);
+  _u.data.hor = _u.data.regs.w.cx;
+  _u.data.ver = _u.data.regs.w.dx;
 
-  if(data.wheel)
-  {
-    if(data.flywheel) {
-      data.mvt.fly = -data.ctr[0]; 
-    } else if(data.weap) {
-      if(data.ctr[0]) data.mvt.btns |= (1 << btn_cycle);
-    } else {
-      if(data.ctr[0] > 0) data.mvt.btns |= (1 << btn_invp);
-      if(data.ctr[0] < 0) data.mvt.btns |= (1 << btn_invn);
-    }
-  }
-  if(data.ctr[1] || data.stat & 1) data.mvt.btns |= (1 << btn_fire);
-  if(data.ctr[2] || data.stat & 2) data.mvt.btns |= (1 << btn_strafe);
-  if(data.flywheel || data.weap) {
-    data.mvt.angle = data.rev * 512;
-    if(data.stat & 4) {
-      if(data.rev > -8) data.rev -= 1;
-    } else {
-      if(data.rev < 0) data.rev += 1;
-    }
-  } else {
-    if(data.ctr[3]) data.mvt.btns |= (1 << btn_art);
-  }
-
-  if(data.tmr) {
-    data.now += 1;
-    data.dbl += data.ctr[2];
-    while(data.dbl >= 2) {
-      data.dbl -= 2;
-      data.clk += 2;
-      data.mvt.btns |= (1 << btn_use);
-    }    
-    if(data.ctr[2] || data.stat & 2) {
-      data.tmr = data.now;
-    } else if(data.now - data.tmr > 9) {
-      if(data.dbl + data.clk >= 15) data.mvt.btns |= (1 << btn_pause);
-      else if(data.dbl + data.clk >= 3) {
-        data.ver = data.pitch = 0;
-        data.mvt.btns |= (1 << btn_center);
+  if(!_u.data.doom) {
+    if(_u.data.wheel)
+    {
+      if(_u.data.flywheel) {
+        _u.data.mvt.fly = -_u.data.ctr[0]; 
+      } else if(_u.data.weap) {
+        if(_u.data.ctr[0]) _u.data.mvt.btns |= (1 << btn_cycle);
+      } else {
+        if(_u.data.ctr[0] > 0) _u.data.mvt.btns |= (1 << btn_invp);
+        if(_u.data.ctr[0] < 0) _u.data.mvt.btns |= (1 << btn_invn);
       }
-      data.tmr = data.dbl = data.clk = 0;
+    }
+    if(_u.data.ctr[1] || _u.data.stat & 1) _u.data.mvt.btns |= (1 << btn_fire);
+    if(_u.data.ctr[2] || _u.data.stat & 2) _u.data.mvt.btns |= (1 << btn_strafe);
+    if(_u.data.flywheel || _u.data.weap) {
+      _u.data.mvt.angle = _u.data.rev * 512;
+      if(_u.data.stat & 4) {
+        if(_u.data.rev > -8) _u.data.rev -= 1;
+      } else {
+        if(_u.data.rev < 0) _u.data.rev += 1;
+      }
+    } else {
+      if(_u.data.ctr[3]) _u.data.mvt.btns |= (1 << btn_art);
+    }
+  } else if(_u.data.doom) {
+    if(_u.data.ctr[1] || _u.data.stat & 1) _u.tic.btns |= (1 << dm_fire);
+    if(_u.data.ctr[3]) {
+      _u.data.dmweap = 2;
+      _u.tic.btns |= (1 << dm_change) | (_u.data.dmweap << 3);
+    } else if(_u.data.wheel && _u.data.ctr[0]) {
+      for(_u.data.i = -_u.data.ctr[0] ; _u.data.i ; ) {
+        if(_u.data.i > 0) {
+          _u.data.dmweap++;
+          _u.data.i--;
+        } else {
+          if(_u.data.dmweap == 0) _u.data.dmweap = 7;
+          _u.data.dmweap--;
+          _u.data.i++;  
+        }
+      }
+      _u.data.dmweap %= 7;
+      _u.tic.btns |= (1 << dm_change) | (_u.data.dmweap << 3);
+    }
+  }
+
+  if(_u.data.tmr) {
+    _u.data.now += 1;
+    _u.data.dbl += _u.data.ctr[2];
+    while(_u.data.dbl >= 2) {
+      _u.data.dbl -= 2;
+      _u.data.clk += 2;
+      if(!_u.data.doom) _u.data.mvt.btns |= (1 << btn_use);
+      else _u.tic.btns |= (1 << dm_use);
+    }    
+    if(_u.data.ctr[2] || _u.data.stat & 2) {
+      _u.data.tmr = _u.data.now;
+    } else if(_u.data.now - _u.data.tmr > 9) {
+      if(!_u.data.doom) {
+        if(_u.data.dbl + _u.data.clk >= 15) _u.data.mvt.btns |= (1 << btn_pause);
+        else if(_u.data.dbl + _u.data.clk >= 3) {
+          _u.data.ver = _u.data.pitch = 0;
+          _u.data.mvt.btns |= (1 << btn_center);
+        }
+      } else if(_u.data.doom) {
+        if(_u.data.dbl + _u.data.clk >= 15) _u.tic.btns = (1 << dm_pause) | (1 << dm_special);
+      }
+      _u.data.tmr = _u.data.dbl = _u.data.clk = 0;
     }  
-  } else if(data.ctr[2] || data.stat & 2) {
-    data.tmr = data.now = 1;
-    data.dbl = data.ctr[2];
-    data.clk = 0;
+  } else if(_u.data.ctr[2] || _u.data.stat & 2) {
+    _u.data.tmr = _u.data.now = 1;
+    _u.data.dbl = _u.data.ctr[2];
+    _u.data.clk = 0;
   } 
 
-  if(data.mvt.btns & (1 << btn_strafe)) {
-    data.mvt.turn = (data.hor * data.sens) / 10 * 2;
-  } else {
-    data.mvt.turn = -(data.hor * data.sens) / 10 * 8;
-  }
-  data.pitch -= (data.ver * data.sens) / 20;
-  data.pitch = data.pitch < 90 ? data.pitch > - 110 ? data.pitch : -110 : 90;
-  data.mvt.look = data.pitch;
+  if(!_u.data.doom) {
+    if(_u.data.mvt.btns & (1 << btn_strafe)) {
+      _u.data.mvt.turn = (_u.data.hor * _u.data.sens) / 10 * 2;
+    } else {
+      _u.data.mvt.turn = -(_u.data.hor * _u.data.sens) / 10 * 8;
+    }
+    _u.data.pitch -= (_u.data.ver * _u.data.sens) / 20;
+    _u.data.pitch = _u.data.pitch < 90 ? _u.data.pitch > - 110 ? _u.data.pitch : -110 : 90;
+    _u.data.mvt.look = _u.data.pitch;
 
-  if(data.run) data.mvt.btns |= (1 << btn_run);
+    if(_u.data.run) _u.data.mvt.btns |= (1 << btn_run);
+  } else if(_u.data.doom) {
+    if(_u.data.ctr[1] || _u.data.stat & 2) {
+      _u.data.i = (_u.data.hor * _u.data.sens) / 10 * 2;
+      _u.tic.strafe = _u.data.i >= -128 ? _u.data.i < 127 ? _u.data.i : 127 : -128;
+    } else {
+      _u.tic.turn = -(_u.data.hor * _u.data.sens) / 10 * 8;
+    }
+  }
 }
 
 char exec_cmd(char cmd)
 {
   switch(cmd) {
     case cmd_uninst:
-      _dos_setvect(data.vector, (handler_t)0);
-      _dos_freemem(data.psp);
+      _dos_setvect(_u.data.vector, (handler_t)0);
+      _dos_freemem(_u.data.psp);
       return cmd; 
     default:
       ;
@@ -187,13 +247,13 @@ char exec_cmd(char cmd)
 
 void _WCINTERRUPT our_handler()
 {
-  char req = data.req, resp = data.resp, cnfm = data.cnfm;
-  data.req = data.resp = data.cnfm = data.ack = 0;
+  char req = _u.data.req, resp = _u.data.resp, cnfm = _u.data.cnfm;
+  _u.data.req = _u.data.resp = _u.data.cnfm = _u.data.ack = 0;
 
   check_controls();
 
-  if(resp && resp == cnfm) data.ack = exec_cmd(cnfm);
-  else if(req) data.resp = req;
+  if(resp && resp == cnfm) _u.data.ack = exec_cmd(cnfm);
+  else if(req) _u.data.resp = req;
 }
 
 void doneprog()
@@ -223,7 +283,8 @@ void help()
   printf("                 \"k\" will generate " KILLTSR ".BAT in current directory\n");
   printf("                 \"a\" is for always run,\n");
   printf("                 \"f\" is for flight mousewheel control\n");
-  printf("                 \"w\" is for weapons mousewheel control\n\n");
+  printf("                 \"w\" is for weapons mousewheel control\n");
+  printf("                 \"d\" is for Doom/Ultimate Doom/Doom II/...\n\n");
   printf("Or:    TYPE RESPONSE | CUTEHT [...] > RESP.TMP\n");
   printf("       HERETIC @RESP.TMP\n");
   printf("if -k: " KILLTSR "\n");
@@ -247,7 +308,7 @@ void makekill(int argc, char ** argv, long mem)
 
 void main(int argc, char ** argv)
 {
-  int i = 0, v = 0, j = 0, u = 0, s = 10, a = 0, r = 0, f = 0, w = 0, k = 0;
+  int i = 0, v = 0, j = 0, u = 0, s = 10, a = 0, r = 0, f = 0, w = 0, k = 0, d = 0;
   long l = 0;
   handler_t org = 0;
   struct SREGS segs;
@@ -280,6 +341,7 @@ void main(int argc, char ** argv)
     else if(*argv[j] == 'f' || *argv[j] == 'F') f = 1; 
     else if(*argv[j] == 'w' || *argv[j] == 'W') w = 1; 
     else if(*argv[j] == 'k' || *argv[j] == 'K') k = 1; 
+    else if(*argv[j] == 'd' || *argv[j] == 'D') d = 1; 
     else if(*argv[j] == '?' || *argv[j] == 'h' || *argv[j] == 'h') help();
   }
 
@@ -287,21 +349,21 @@ void main(int argc, char ** argv)
 
   if(l) {
     remote = MK_FP(l >> 4, l & 0xf);
-    _fmemcpy(&data, remote, sizeof(data));
-    if(!strncmp(SIGNATURE, &data.sgn, sizeof(SIGNATURE) - 1))
+    _fmemcpy(&_u, remote, sizeof(_u.data));
+    if(!strncmp(SIGNATURE, &_u.data.sgn, sizeof(SIGNATURE) - 1))
     {
-      if(data.vector >= 0x60 && data.vector <= 0x67) {
-        summary(data.vector, u, r);
+      if(_u.data.vector >= 0x60 && _u.data.vector <= 0x67) {
+        summary(_u.data.vector, u, r);
         
-        data.req = cmd_uninst;
-        _fmemcpy(remote, &data, sizeof(data));
-        intr(data.vector, &regs);
-        _fmemcpy(&data, remote, sizeof(data));
-        if(data.resp == cmd_uninst) {
-          data.cnfm = data.resp;
+        _u.data.req = cmd_uninst;
+        _fmemcpy(remote, &_u, sizeof(_u.data));
+        intr(_u.data.vector, &regs);
+        _fmemcpy(&_u, remote, sizeof(_u.data));
+        if(_u.data.resp == cmd_uninst) {
+          _u.data.cnfm = _u.data.resp;
           if(!r) printf("Uninstall command sent... ");
-          _fmemcpy(remote, &data, sizeof(data));
-          intr(data.vector, &regs);
+          _fmemcpy(remote, &_u, sizeof(_u.data));
+          intr(_u.data.vector, &regs);
           doneprog();
         }
       }
@@ -333,17 +395,17 @@ inst:
     doneprog();
   }
 
-  memset(&data, 0, sizeof(data));
-  strcpy(&(data.sgn), SIGNATURE);
-  data.vector = v;
-  data.psp = _psp; 
+  memset(&_u, 0, sizeof(_u.data));
+  strcpy(&(_u.data.sgn), SIGNATURE);
+  _u.data.vector = v;
+  _u.data.psp = _psp; 
 
   regs.w.ax = 0x11;
   intr(0x33, &regs);
-  data.wheel = regs.w.ax == 0x574d && regs.w.cx & 1;
-  if(data.wheel) {
+  _u.data.wheel = regs.w.ax == 0x574d && regs.w.cx & 1;
+  if(_u.data.wheel) {
     if(!r) printf("Mouse wheel detected.");
-    if(f) {
+    if(f && !d) {
       if(!r) printf(" Wheel controls flight.");
     }
     else if(w) {
@@ -351,35 +413,40 @@ inst:
     }
     printf("\n");
   }
-
-  if(f) {
-    data.flywheel = f;
+  
+  if(d) {
+    _u.data.doom = d;
+  }
+  else if(f) {
+    _u.data.flywheel = f;
   }
   else if(w) {
-    data.weap = w;
+    _u.data.weap = w;
   }
 
   if(s < 1 || s > 50) s = 10;
   if(!r) printf("Sensitivity: %d.", s);
-  data.sens = s;
-  if(!r) printf("%s\n", a ? " Always run on." : "");
-  data.run = a;
-  data.flywheel = f;
+  _u.data.sens = s;
+  if(!r) printf("%s\n", a && !d ? " Always run on." : "");
+  if(!d) {
+    _u.data.run = a;
+  }
 
   segread(&segs);
-  l = ((long)segs.ds << 4) + (unsigned)(&data);
+  l = ((long)segs.ds << 4) + (unsigned)(&_u);
   if(k) makekill(argc, argv, l);
   if(!r) {
-    printf("Memory block: %ld (%x:%x)\n", l, segs.ds, &data);
-    printf("HERETIC -nomouse -externdriver %ld\n", l);
+    printf("Memory block: %ld (%x:%x)\n", l, segs.ds, &_u);
+    printf("%s -nomouse -%s %ld\n",
+           d ? "DOOM" : "HERETIC", d ? "control" : "externdriver", l);
     if(k) printf("then run " KILLTSR " to remove driver.\n");
   } else {
-    printf("-nomouse\n-externdriver %ld\n", l);
+    printf("-nomouse\n-%s %ld\n", d ? "control" : "externdriver", l);
   }
 
   _dos_setvect(v, our_handler);
   l = (long)segs.ds - _psp;
-  l = ((l << 4) + (unsigned)(&data) + sizeof(data) - 1) / 16 + 1;
+  l = ((l << 4) + (unsigned)(&_u) + sizeof(_u.data) - 1) / 16 + 1;
   fclose(stdin); fclose(stdout); fclose(stderr);
   remote = MK_FP(_psp, 0x2c);
   _fmemcpy(&i, remote, sizeof(unsigned short));
