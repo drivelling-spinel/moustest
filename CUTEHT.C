@@ -9,7 +9,7 @@
 #include <i86.h>
 #include <graph.h>
 
-#define SIGNATURE "CUTEHTV3"
+#define SIGNATURE "CUTEHTV4"
 #define KILLTSR "KILLTSR"
 
 typedef enum {
@@ -86,6 +86,11 @@ typedef struct
  char cnfm;
  char ack;
  char doom;
+ char nl;
+ char mult;
+ char test;
+ int vntic; 
+ int vlim;
 
  union REGPACK regs;
  int ctr[4];
@@ -104,13 +109,31 @@ union {
   doomtic_t tic;
 } _u;
 
+int calc(int x, int m) 
+{
+  int i, j, a, r, s;
+  a = x < 0 ? -x : x;
+  if(a <= 1) return x;
+ 
+  for(j = a , s = r = 0; j > 0 ; j >>= 1) if(j&1) r+=1 ; else s+=1 ; 
+  j = s + r - 1;
+  if(j&1) j += r > s ? 1 : -1;
+  for(i = 0, j >>= 1, r = s = 1 ; i < j ; i += 1) { r <<= 1 ; s <<= 1; }
+  for(j <<= 1 ; i < j ; i += 1) s <<= 1;
+  
+  a = (a + s) / 2 / r;
+  if(m) return a;
+  return x < 0 ? -a : a;
+}
+
 void check_controls()
 {
   memset(&_u.data.mvt, 0, sizeof(_u.data.mvt));
 
   if(!_u.data.reset) {
     _u.data.reset = 1;
-    _u.data.ver = 0;
+    _u.data.ver = _u.data.vntic = 0;
+    _u.data.vlim = 7 * _u.data.mult;
     for( _u.data.i = -1 ; _u.data.i < 3 ; _u.data.i += 1) {
       memset(&_u.data.regs, 0, sizeof(_u.data.regs));
       _u.data.regs.w.ax = 5;
@@ -140,7 +163,9 @@ void check_controls()
   if(!_u.data.doom) {
     if(_u.data.wheel)
     {
-      if(_u.data.flywheel) {
+      if(_u.data.test) {
+        _u.data.pitch += _u.data.ctr[0] > 0 ? 1 : _u.data.ctr[0] < 0 ? -1 : 0; 
+      } else if(_u.data.flywheel) {
         _u.data.mvt.fly = -_u.data.ctr[0]; 
       } else if(_u.data.weap) {
         if(_u.data.ctr[0]) _u.data.mvt.btns |= (1 << btn_cycle);
@@ -195,9 +220,14 @@ void check_controls()
       _u.data.tmr = _u.data.now;
     } else if(_u.data.now - _u.data.tmr > 9) {
       if(!_u.data.doom) {
-        if(_u.data.dbl + _u.data.clk >= 15) _u.data.mvt.btns |= (1 << btn_pause);
+        if(_u.data.dbl + _u.data.clk >= 6) {
+          _u.data.mvt.btns |= (1 << btn_pause);
+          if(_u.data.flywheel) { _u.data.flywheel = 0 ; _u.data.weap = 1 ; }
+          else if(_u.data.weap) { _u.data.flywheel = _u.data.weap = 0 ; }
+          else { _u.data.flywheel = 1; _u.data.weap = 0; }
+        }
         else if(_u.data.dbl + _u.data.clk >= 3) {
-          _u.data.ver = _u.data.pitch = 0;
+          _u.data.ver = _u.data.pitch = _u.data.vntic = 0;
           _u.data.mvt.btns |= (1 << btn_center);
         }
       } else if(_u.data.doom) {
@@ -212,13 +242,34 @@ void check_controls()
   } 
 
   if(!_u.data.doom) {
-    if(_u.data.mvt.btns & (1 << btn_strafe)) {
-      _u.data.mvt.turn = (_u.data.hor * _u.data.sens) / 10 * 2;
-    } else {
-      _u.data.mvt.turn = -(_u.data.hor * _u.data.sens) / 10 * 8;
+    _u.data.i = _u.data.hor;
+    if(_u.data.nl) {
+      _u.data.i = _u.data.i > -1024 ? _u.data.i < 1024 ? _u.data.i : 1024 : -1024;
+      _u.data.i = _u.data.i * calc(_u.data.i, 1);
     }
-    _u.data.pitch -= (_u.data.ver * _u.data.sens) / 20;
-    _u.data.pitch = _u.data.pitch < 90 ? _u.data.pitch > - 110 ? _u.data.pitch : -110 : 90;
+    else {
+      if(_u.data.mvt.btns & (1 << btn_strafe)) {
+        _u.data.i = _u.data.i * _u.data.sens / 10 * 2;
+      } else {
+        _u.data.i = _u.data.i * _u.data.sens / 10 * 8;
+      }
+    }  
+    if(~_u.data.mvt.btns & (1 << btn_strafe)) 
+      _u.data.i = -_u.data.i;
+    _u.data.mvt.turn = _u.data.i;
+  
+    _u.data.i = _u.data.ver;
+    if(_u.data.nl) {
+      _u.data.i = calc(_u.data.i, 0);
+      _u.data.i -= _u.data.vntic - _u.data.pitch;
+      _u.data.vntic = _u.data.pitch - _u.data.i;
+      _u.data.vntic = _u.data.vntic > -110 ? _u.data.vntic < 90 ? _u.data.vntic : 90 : -110;
+      _u.data.i = _u.data.i > -_u.data.vlim ? _u.data.i < _u.data.vlim ? _u.data.i : _u.data.vlim : -_u.data.vlim;
+    } else {
+      _u.data.i = _u.data.i * _u.data.sens / 20;
+    }
+    if(!_u.data.test) _u.data.pitch -= _u.data.i;
+    _u.data.pitch = _u.data.pitch > -110 ? _u.data.pitch < 90 ? _u.data.pitch : 90 : -110;
     _u.data.mvt.look = _u.data.pitch;
 
     if(_u.data.run) _u.data.mvt.btns |= (1 << btn_run);
@@ -276,19 +327,23 @@ char * progname(int argc, char ** argv)
 void help()
 {
   printf("\nHeretic CuteMouse Driver.\n");
-  printf("Usage: CUTEHT [-v0x<vector>] [-u<address>] [-s<sensitivity>] [-a] [-f|w] [-k]\n");
-  printf("                 where value is from (60-67),\n");
-  printf("                 address is memory block output by the driver before,\n");
-  printf("                 sensitivity is from 1 to 50,\n");
-  printf("                 \"k\" will generate " KILLTSR ".BAT in current directory\n");
+  printf("Usage: CUTEHT [-v0x<vector>] [-u<address>] [-s<sensitivity>|-n] \n");
+  printf("              [-a] [-f|w] [-k] [-d] [-t] [-m<multiplier>]\n");
+  printf("                 where <vector> is from (60-67),\n");
+  printf("                 <address> is memory block output by the driver before,\n");
+  printf("                 <sensitivity> is from (1-50),\n");
+  printf("                 \"n\" changes how sensitivity is applied,\n");
   printf("                 \"a\" is for always run,\n");
   printf("                 \"f\" is for flight mousewheel control\n");
   printf("                 \"w\" is for weapons mousewheel control\n");
   printf("                 \"d\" is for Doom/Ultimate Doom/Doom II/...\n\n");
+  printf("                 \"k\" will generate " KILLTSR ".BAT in current directory\n");
+  printf("                 \"t\" is to active test mode for developers\n");
+  printf("                 <multiplier> can be 1, 2 or 5 and is for use with modded game\n\n");
   printf("Or:    TYPE RESPONSE | CUTEHT [...] > RESP.TMP\n");
   printf("       HERETIC @RESP.TMP\n");
   printf("if -k: " KILLTSR "\n");
-  printf("\n");
+  printf("\n (c) 2026, Ludictous_peridot\n");
   doneprog();
 }
 
@@ -308,7 +363,7 @@ void makekill(int argc, char ** argv, long mem)
 
 void main(int argc, char ** argv)
 {
-  int i = 0, v = 0, j = 0, u = 0, s = 10, a = 0, r = 0, f = 0, w = 0, k = 0, d = 0;
+  int i = 0, v = 0, j = 0, u = 0, s = 10, a = 0, r = 0, f = 0, w = 0, k = 0, d = 0, n = 0, m = 0, t = 0;
   long l = 0;
   handler_t org = 0;
   struct SREGS segs;
@@ -342,6 +397,12 @@ void main(int argc, char ** argv)
     else if(*argv[j] == 'w' || *argv[j] == 'W') w = 1; 
     else if(*argv[j] == 'k' || *argv[j] == 'K') k = 1; 
     else if(*argv[j] == 'd' || *argv[j] == 'D') d = 1; 
+    else if(*argv[j] == 'n' || *argv[j] == 'N') n = 1; 
+    else if(*argv[j] == 't' || *argv[j] == 'T') t = 1; 
+    else if(*argv[j] == 'm' || *argv[j] == 'M') 
+      sscanf(*(argv[j] + 1) || (j + 1 >= argc) ? argv[j] + 1 : argv[j += 1],
+             "%d", &m);
+
     else if(*argv[j] == '?' || *argv[j] == 'h' || *argv[j] == 'h') help();
   }
 
@@ -405,7 +466,9 @@ inst:
   _u.data.wheel = regs.w.ax == 0x574d && regs.w.cx & 1;
   if(_u.data.wheel) {
     if(!r) printf("Mouse wheel detected.");
-    if(f && !d) {
+    if(t && !d) {
+      if(!r) printf(" Test mode.");
+    } else if(f && !d) {
       if(!r) printf(" Wheel controls flight.");
     }
     else if(w) {
@@ -417,19 +480,28 @@ inst:
   if(d) {
     _u.data.doom = d;
   }
-  else if(f) {
+  else if(t) {
+    _u.data.test = t;
+  } else if(f) {
     _u.data.flywheel = f;
-  }
-  else if(w) {
+  } else if(w) {
     _u.data.weap = w;
   }
 
   if(s < 1 || s > 50) s = 10;
-  if(!r) printf("Sensitivity: %d.", s);
+  if(m != 1 && m != 2) m = 5;
+  if(!r) printf("Sensitivity: %d", s);
   _u.data.sens = s;
-  if(!r) printf("%s\n", a && !d ? " Always run on." : "");
+  if(!r) {
+    if(n && !d) printf(" (non linear)"); 
+    if(m && m != 5 && !d) printf(". Modded look step"); 
+    if(a && !d) printf(". Always run on");
+    printf(".\n"); 
+  }
   if(!d) {
     _u.data.run = a;
+    _u.data.nl = n;
+    _u.data.mult = m;
   }
 
   segread(&segs);
